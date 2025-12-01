@@ -20,9 +20,7 @@ class NfcService {
             final ndef = Ndef.from(tag);
             if (ndef == null) {
               print('Tag không hỗ trợ NDEF');
-              await NfcManager.instance.stopSession(
-                errorMessage: 'Thẻ không hỗ trợ',
-              );
+              await NfcManager.instance.stopSession();
               return;
             }
 
@@ -30,7 +28,7 @@ class NfcService {
             final cachedMessage = ndef.cachedMessage;
             if (cachedMessage == null || cachedMessage.records.isEmpty) {
               print('Không có dữ liệu trên thẻ');
-              await NfcManager.instance.stopSession(errorMessage: 'Thẻ trống');
+              await NfcManager.instance.stopSession();
               return;
             }
 
@@ -55,7 +53,7 @@ class NfcService {
             await NfcManager.instance.stopSession();
           } catch (e) {
             print('Lỗi khi đọc thẻ: $e');
-            await NfcManager.instance.stopSession(errorMessage: 'Lỗi đọc thẻ');
+            await NfcManager.instance.stopSession();
           }
         },
       );
@@ -77,17 +75,13 @@ class NfcService {
           try {
             final ndef = Ndef.from(tag);
             if (ndef == null) {
-              await NfcManager.instance.stopSession(
-                errorMessage: 'Thẻ không hỗ trợ NDEF',
-              );
+              await NfcManager.instance.stopSession();
               return;
             }
 
             // Kiểm tra thẻ có thể ghi không
             if (!ndef.isWritable) {
-              await NfcManager.instance.stopSession(
-                errorMessage: 'Thẻ không thể ghi',
-              );
+              await NfcManager.instance.stopSession();
               return;
             }
 
@@ -103,9 +97,7 @@ class NfcService {
             // Kiểm tra kích thước
             final size = ndefMessage.byteLength;
             if (size > ndef.maxSize) {
-              await NfcManager.instance.stopSession(
-                errorMessage: 'Dữ liệu quá lớn',
-              );
+              await NfcManager.instance.stopSession();
               return;
             }
 
@@ -113,12 +105,10 @@ class NfcService {
             await ndef.write(ndefMessage);
             success = true;
 
-            await NfcManager.instance.stopSession(
-              alertMessage: 'Ghi thẻ thành công',
-            );
+            await NfcManager.instance.stopSession();
           } catch (e) {
             print('Lỗi khi ghi thẻ: $e');
-            await NfcManager.instance.stopSession(errorMessage: 'Lỗi ghi thẻ');
+            await NfcManager.instance.stopSession();
           }
         },
       );
@@ -133,7 +123,7 @@ class NfcService {
   // Dừng session NFC
   Future<void> stopSession({String? message}) async {
     try {
-      await NfcManager.instance.stopSession(alertMessage: message);
+      await NfcManager.instance.stopSession();
     } catch (e) {
       print('Lỗi khi dừng session: $e');
     }
