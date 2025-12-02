@@ -4,6 +4,7 @@ import '../models/attendance.dart';
 import '../services/database_helper.dart';
 import '../services/nfc_service.dart';
 import 'write_nfc_screen.dart';
+import 'batch_write_nfc_screen.dart';
 import 'employee_list_screen.dart';
 import 'result_screen.dart';
 
@@ -205,15 +206,48 @@ class _HomeScreenState extends State<HomeScreen> {
             },
             tooltip: 'Danh sách nhân viên',
           ),
-          IconButton(
+          PopupMenuButton<String>(
             icon: const Icon(Icons.edit_note),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const WriteNfcScreen()),
-              );
-            },
             tooltip: 'Ghi thẻ NFC',
+            onSelected: (value) {
+              if (value == 'single') {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const WriteNfcScreen(),
+                  ),
+                );
+              } else if (value == 'batch') {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const BatchWriteNfcScreen(),
+                  ),
+                );
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'single',
+                child: Row(
+                  children: [
+                    Icon(Icons.person_add, color: Colors.blue),
+                    SizedBox(width: 8),
+                    Text('Ghi 1 thẻ'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'batch',
+                child: Row(
+                  children: [
+                    Icon(Icons.group_add, color: Colors.blue),
+                    SizedBox(width: 8),
+                    Text('Ghi nhiều thẻ'),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),

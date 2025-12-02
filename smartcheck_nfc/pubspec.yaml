@@ -49,6 +49,11 @@ dependencies:
   intl: ^0.20.2
   shared_preferences: ^2.2.2
 
+  # File picker
+  file_picker: ^8.1.6
+  csv: ^6.0.0
+  excel: ^4.0.6
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

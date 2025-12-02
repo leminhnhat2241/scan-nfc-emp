@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:nfc_manager/nfc_manager.dart';
 import '../models/employee.dart';
@@ -11,16 +12,19 @@ class NfcService {
   // Đọc dữ liệu từ thẻ NFC
   Future<Employee?> readNfcTag() async {
     try {
-      Employee? employee;
+      final completer = Completer<Employee?>();
 
-      await NfcManager.instance.startSession(
+      NfcManager.instance.startSession(
         onDiscovered: (NfcTag tag) async {
           try {
             // Lấy dữ liệu NDEF từ thẻ
             final ndef = Ndef.from(tag);
             if (ndef == null) {
               print('Tag không hỗ trợ NDEF');
-              await NfcManager.instance.stopSession();
+              await NfcManager.instance.stopSession(
+                errorMessage: 'Tag không hỗ trợ NDEF',
+              );
+              if (!completer.isCompleted) completer.complete(null);
               return;
             }
 
@@ -28,7 +32,10 @@ class NfcService {
             final cachedMessage = ndef.cachedMessage;
             if (cachedMessage == null || cachedMessage.records.isEmpty) {
               print('Không có dữ liệu trên thẻ');
-              await NfcManager.instance.stopSession();
+              await NfcManager.instance.stopSession(
+                errorMessage: 'Không có dữ liệu trên thẻ',
+              );
+              if (!completer.isCompleted) completer.complete(null);
               return;
             }
 
@@ -48,17 +55,29 @@ class NfcService {
 
             // Parse JSON
             final data = json.decode(jsonString);
-            employee = Employee.fromJson(data);
+            final employee = Employee.fromJson(data);
 
-            await NfcManager.instance.stopSession();
+            await NfcManager.instance.stopSession(
+              alertMessage: 'Đọc thẻ thành công!',
+            );
+            if (!completer.isCompleted) completer.complete(employee);
           } catch (e) {
             print('Lỗi khi đọc thẻ: $e');
-            await NfcManager.instance.stopSession();
+            await NfcManager.instance.stopSession(errorMessage: 'Lỗi: $e');
+            if (!completer.isCompleted) completer.complete(null);
           }
         },
       );
 
-      return employee;
+      // Đợi kết quả với timeout 30 giây
+      return await completer.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          print('Timeout khi đọc thẻ');
+          NfcManager.instance.stopSession(errorMessage: 'Hết thời gian chờ');
+          return null;
+        },
+      );
     } catch (e) {
       print('Lỗi NFC: $e');
       return null;
@@ -68,26 +87,42 @@ class NfcService {
   // Ghi dữ liệu lên thẻ NFC
   Future<bool> writeNfcTag(Employee employee) async {
     try {
-      bool success = false;
+      print('=== BẮT ĐẦU GHI THẺ NFC ===');
+      final completer = Completer<bool>();
 
-      await NfcManager.instance.startSession(
+      NfcManager.instance.startSession(
         onDiscovered: (NfcTag tag) async {
+          print('📱 Đã phát hiện thẻ NFC');
           try {
             final ndef = Ndef.from(tag);
             if (ndef == null) {
-              await NfcManager.instance.stopSession();
+              print('❌ Tag không hỗ trợ NDEF');
+              await NfcManager.instance.stopSession(
+                errorMessage: 'Thẻ không hỗ trợ NDEF',
+              );
+              if (!completer.isCompleted) {
+                print('⚠️ Complete với false (không hỗ trợ NDEF)');
+                completer.complete(false);
+              }
               return;
             }
 
             // Kiểm tra thẻ có thể ghi không
             if (!ndef.isWritable) {
-              await NfcManager.instance.stopSession();
+              print('❌ Thẻ không thể ghi');
+              await NfcManager.instance.stopSession(
+                errorMessage: 'Thẻ không thể ghi',
+              );
+              if (!completer.isCompleted) {
+                print('⚠️ Complete với false (không thể ghi)');
+                completer.complete(false);
+              }
               return;
             }
 
             // Chuyển employee thành JSON string
             final jsonString = json.encode(employee.toJson());
-            print('Đang ghi dữ liệu: $jsonString');
+            print('📝 Đang ghi dữ liệu: $jsonString');
 
             // Tạo NDEF message
             final ndefMessage = NdefMessage([
@@ -97,25 +132,58 @@ class NfcService {
             // Kiểm tra kích thước
             final size = ndefMessage.byteLength;
             if (size > ndef.maxSize) {
-              await NfcManager.instance.stopSession();
+              print('❌ Dữ liệu quá lớn: $size > ${ndef.maxSize}');
+              await NfcManager.instance.stopSession(
+                errorMessage: 'Dữ liệu quá lớn',
+              );
+              if (!completer.isCompleted) {
+                print('⚠️ Complete với false (dữ liệu quá lớn)');
+                completer.complete(false);
+              }
               return;
             }
 
             // Ghi dữ liệu
+            print('✍️ Đang ghi vào thẻ...');
             await ndef.write(ndefMessage);
-            success = true;
+            print('✅ Đã ghi dữ liệu thành công!');
 
-            await NfcManager.instance.stopSession();
+            await NfcManager.instance.stopSession(
+              alertMessage: 'Ghi thẻ thành công!',
+            );
+
+            if (!completer.isCompleted) {
+              print('✅ Complete với TRUE');
+              completer.complete(true);
+            } else {
+              print('⚠️ Completer đã được complete trước đó');
+            }
           } catch (e) {
-            print('Lỗi khi ghi thẻ: $e');
-            await NfcManager.instance.stopSession();
+            print('❌ Lỗi khi ghi thẻ: $e');
+            await NfcManager.instance.stopSession(errorMessage: 'Lỗi: $e');
+            if (!completer.isCompleted) {
+              print('⚠️ Complete với false (exception)');
+              completer.complete(false);
+            }
           }
         },
       );
 
-      return success;
+      print('⏳ Đang chờ kết quả từ NFC session...');
+      // Đợi kết quả với timeout 30 giây
+      final result = await completer.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          print('⏱️ TIMEOUT khi ghi thẻ');
+          NfcManager.instance.stopSession(errorMessage: 'Hết thời gian chờ');
+          return false;
+        },
+      );
+
+      print('🏁 Kết quả cuối cùng: $result');
+      return result;
     } catch (e) {
-      print('Lỗi NFC: $e');
+      print('❌ Lỗi NFC ngoài: $e');
       return false;
     }
   }

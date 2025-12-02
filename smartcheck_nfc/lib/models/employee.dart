@@ -3,12 +3,14 @@ class Employee {
   final String name;
   final String? department;
   final String? position;
+  final bool isDeleted;
 
   Employee({
     required this.employeeId,
     required this.name,
     this.department,
     this.position,
+    this.isDeleted = false,
   });
 
   // Chuyển đổi từ Map sang Employee
@@ -18,6 +20,7 @@ class Employee {
       name: map['name'] as String,
       department: map['department'] as String?,
       position: map['position'] as String?,
+      isDeleted: (map['is_deleted'] as int?) == 1,
     );
   }
 
@@ -28,6 +31,7 @@ class Employee {
       'name': name,
       'department': department,
       'position': position,
+      'is_deleted': isDeleted ? 1 : 0,
     };
   }
 
@@ -53,6 +57,6 @@ class Employee {
 
   @override
   String toString() {
-    return 'Employee{employeeId: $employeeId, name: $name, department: $department, position: $position}';
+    return 'Employee{employeeId: $employeeId, name: $name, department: $department, position: $position, isDeleted: $isDeleted}';
   }
 }

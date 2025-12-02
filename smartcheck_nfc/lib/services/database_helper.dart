@@ -19,7 +19,40 @@ class DatabaseHelper {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, filePath);
 
-    return await openDatabase(path, version: 1, onCreate: _createDB);
+    return await openDatabase(
+      path,
+      version: 2, // Tăng version để chạy migration
+      onCreate: _createDB,
+      onUpgrade: _onUpgrade,
+    );
+  }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      // Kiểm tra xem cột is_deleted đã tồn tại chưa
+      try {
+        final result = await db.rawQuery('PRAGMA table_info(employees)');
+        final hasIsDeletedColumn = result.any(
+          (column) => column['name'] == 'is_deleted',
+        );
+
+        if (!hasIsDeletedColumn) {
+          // Thêm cột is_deleted vào bảng employees nếu chưa có
+          await db.execute('''
+            ALTER TABLE employees ADD COLUMN is_deleted INTEGER DEFAULT 0
+          ''');
+          print('✅ Đã thêm cột is_deleted vào bảng employees');
+        } else {
+          print('ℹ️ Cột is_deleted đã tồn tại, bỏ qua migration');
+        }
+      } catch (e) {
+        print('⚠️ Lỗi khi migration: $e');
+        // Nếu lỗi vì cột đã tồn tại, bỏ qua
+        if (!e.toString().contains('duplicate column')) {
+          rethrow;
+        }
+      }
+    }
   }
 
   Future<void> _createDB(Database db, int version) async {
@@ -29,7 +62,8 @@ class DatabaseHelper {
         employee_id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         department TEXT,
-        position TEXT
+        position TEXT,
+        is_deleted INTEGER DEFAULT 0
       )
     ''');
 
@@ -80,20 +114,24 @@ class DatabaseHelper {
     );
   }
 
-  // Lấy tất cả nhân viên
+  // Lấy tất cả nhân viên (chưa bị xóa)
   Future<List<Employee>> getAllEmployees() async {
     final db = await database;
-    final List<Map<String, dynamic>> maps = await db.query('employees');
+    final List<Map<String, dynamic>> maps = await db.query(
+      'employees',
+      where: 'is_deleted = ?',
+      whereArgs: [0],
+    );
     return List.generate(maps.length, (i) => Employee.fromMap(maps[i]));
   }
 
-  // Lấy nhân viên theo ID
+  // Lấy nhân viên theo ID (chưa bị xóa)
   Future<Employee?> getEmployeeById(String employeeId) async {
     final db = await database;
     final List<Map<String, dynamic>> maps = await db.query(
       'employees',
-      where: 'employee_id = ?',
-      whereArgs: [employeeId],
+      where: 'employee_id = ? AND is_deleted = ?',
+      whereArgs: [employeeId, 0],
     );
 
     if (maps.isEmpty) return null;
@@ -111,8 +149,30 @@ class DatabaseHelper {
     );
   }
 
-  // Xóa nhân viên
+  // Xóa mềm nhân viên (soft delete)
   Future<void> deleteEmployee(String employeeId) async {
+    final db = await database;
+    await db.update(
+      'employees',
+      {'is_deleted': 1},
+      where: 'employee_id = ?',
+      whereArgs: [employeeId],
+    );
+  }
+
+  // Khôi phục nhân viên đã xóa
+  Future<void> restoreEmployee(String employeeId) async {
+    final db = await database;
+    await db.update(
+      'employees',
+      {'is_deleted': 0},
+      where: 'employee_id = ?',
+      whereArgs: [employeeId],
+    );
+  }
+
+  // Xóa cứng nhân viên (hard delete - nên tránh dùng)
+  Future<void> permanentDeleteEmployee(String employeeId) async {
     final db = await database;
     await db.delete(
       'employees',

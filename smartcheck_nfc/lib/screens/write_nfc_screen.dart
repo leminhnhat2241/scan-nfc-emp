@@ -12,37 +12,130 @@ class WriteNfcScreen extends StatefulWidget {
 
 class _WriteNfcScreenState extends State<WriteNfcScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _employeeIdController = TextEditingController();
   final _nameController = TextEditingController();
-  final _departmentController = TextEditingController();
-  final _positionController = TextEditingController();
 
   final NfcService _nfcService = NfcService();
   final DatabaseHelper _dbHelper = DatabaseHelper.instance;
 
   bool _isWriting = false;
   bool _isNfcAvailable = false;
+  String _nextEmployeeId = '';
+  String? _selectedDepartment;
+  String? _selectedPosition;
+
+  // Map phòng ban với prefix mã
+  final Map<String, String> _departmentPrefixes = {
+    'Kỹ thuật': 'KT',
+    'Kinh doanh': 'KD',
+    'Hành chính': 'HC',
+    'Nhân sự': 'NS',
+    'Kế toán': 'KT',
+    'Marketing': 'MK',
+    'IT': 'IT',
+    'Sản xuất': 'SX',
+  };
+
+  List<String> get _departments => _departmentPrefixes.keys.toList();
+
+  // Danh sách chức vụ
+  final List<String> _positions = [
+    'Giám đốc',
+    'Phó giám đốc',
+    'Trưởng phòng',
+    'Phó phòng',
+    'Nhân viên',
+    'Thực tập sinh',
+    'Chuyên viên',
+    'Kỹ sư',
+  ];
 
   @override
   void initState() {
     super.initState();
-    _checkNfcAvailability();
+    _initializeScreen();
+  }
+
+  Future<void> _initializeScreen() async {
+    try {
+      await _checkNfcAvailability();
+    } catch (e) {
+      print('Lỗi khi khởi tạo màn hình: $e');
+      if (mounted) {
+        setState(() {
+          _isNfcAvailable = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _checkNfcAvailability() async {
+    try {
+      final available = await _nfcService.isNfcAvailable();
+      if (mounted) {
+        setState(() {
+          _isNfcAvailable = available;
+        });
+      }
+    } catch (e) {
+      print('Lỗi kiểm tra NFC: $e');
+      if (mounted) {
+        setState(() {
+          _isNfcAvailable = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadNextEmployeeId(String department) async {
+    try {
+      final prefix = _departmentPrefixes[department] ?? 'NV';
+      final employees = await _dbHelper.getAllEmployees();
+
+      // Lọc nhân viên theo phòng ban
+      final departmentEmployees = employees
+          .where((e) => e.department == department)
+          .toList();
+
+      if (departmentEmployees.isEmpty) {
+        if (mounted) {
+          setState(() {
+            _nextEmployeeId = '${prefix}001';
+          });
+        }
+      } else {
+        // Tìm số lớn nhất từ các mã nhân viên cùng phòng ban
+        int maxNumber = 0;
+        for (var emp in departmentEmployees) {
+          // Lấy phần số từ mã (bỏ chữ cái prefix)
+          final numberPart = emp.employeeId.replaceAll(RegExp(r'[^0-9]'), '');
+          if (numberPart.isNotEmpty) {
+            final number = int.tryParse(numberPart) ?? 0;
+            if (number > maxNumber) {
+              maxNumber = number;
+            }
+          }
+        }
+        if (mounted) {
+          setState(() {
+            _nextEmployeeId =
+                '$prefix${(maxNumber + 1).toString().padLeft(3, '0')}';
+          });
+        }
+      }
+    } catch (e) {
+      print('Lỗi load employee ID: $e');
+      if (mounted) {
+        setState(() {
+          _nextEmployeeId = '${_departmentPrefixes[department] ?? 'NV'}001';
+        });
+      }
+    }
   }
 
   @override
   void dispose() {
-    _employeeIdController.dispose();
     _nameController.dispose();
-    _departmentController.dispose();
-    _positionController.dispose();
     super.dispose();
-  }
-
-  Future<void> _checkNfcAvailability() async {
-    final available = await _nfcService.isNfcAvailable();
-    setState(() {
-      _isNfcAvailable = available;
-    });
   }
 
   Future<void> _writeToNfc() async {
@@ -62,26 +155,35 @@ class _WriteNfcScreenState extends State<WriteNfcScreen> {
     try {
       // Tạo object Employee
       final employee = Employee(
-        employeeId: _employeeIdController.text.trim(),
+        employeeId: _nextEmployeeId,
         name: _nameController.text.trim(),
-        department: _departmentController.text.trim().isEmpty
-            ? null
-            : _departmentController.text.trim(),
-        position: _positionController.text.trim().isEmpty
-            ? null
-            : _positionController.text.trim(),
+        department: _selectedDepartment,
+        position: _selectedPosition,
       );
 
-      // Lưu vào database trước
-      await _dbHelper.insertEmployee(employee);
+      // Kiểm tra nhân viên đã tồn tại chưa
+      final existingEmployee = await _dbHelper.getEmployeeById(
+        employee.employeeId,
+      );
+
+      if (existingEmployee != null) {
+        _showMessage(
+          'Mã nhân viên ${employee.employeeId} đã tồn tại. Vui lòng chọn phòng ban lại để tạo mã mới.',
+          isError: true,
+        );
+        return;
+      }
 
       // Hiển thị hướng dẫn
       _showMessage('Vui lòng đưa thẻ NFC đến điện thoại...', isInfo: true);
 
-      // Ghi vào thẻ NFC
+      // Ghi vào thẻ NFC TRƯỚC
       final success = await _nfcService.writeNfcTag(employee);
 
       if (success) {
+        // CHỈ lưu vào database KHI ghi NFC thành công
+        await _dbHelper.insertEmployee(employee);
+
         _showSuccessDialog(employee);
         _clearForm();
       } else {
@@ -97,10 +199,12 @@ class _WriteNfcScreenState extends State<WriteNfcScreen> {
   }
 
   void _clearForm() {
-    _employeeIdController.clear();
     _nameController.clear();
-    _departmentController.clear();
-    _positionController.clear();
+    setState(() {
+      _selectedDepartment = null;
+      _selectedPosition = null;
+      _nextEmployeeId = '';
+    });
   }
 
   void _showSuccessDialog(Employee employee) {
@@ -200,25 +304,52 @@ class _WriteNfcScreenState extends State<WriteNfcScreen> {
 
               const SizedBox(height: 24),
 
-              // Form nhập liệu
-              TextFormField(
-                controller: _employeeIdController,
-                decoration: const InputDecoration(
-                  labelText: 'Mã nhân viên *',
-                  hintText: 'VD: EMP001',
-                  border: OutlineInputBorder(),
-                  prefixIcon: Icon(Icons.badge),
+              // Hiển thị mã nhân viên tự động
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue.shade200),
                 ),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Vui lòng nhập mã nhân viên';
-                  }
-                  return null;
-                },
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Icon(Icons.badge, color: Colors.blue.shade700),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Mã nhân viên tự động',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade600,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _nextEmployeeId.isEmpty
+                                ? 'Chọn phòng ban để tạo mã'
+                                : '$_nextEmployeeId',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: _nextEmployeeId.isEmpty
+                                  ? Colors.grey.shade600
+                                  : Colors.blue.shade700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
 
               const SizedBox(height: 16),
 
+              // Form nhập liệu
               TextFormField(
                 controller: _nameController,
                 decoration: const InputDecoration(
@@ -237,26 +368,54 @@ class _WriteNfcScreenState extends State<WriteNfcScreen> {
 
               const SizedBox(height: 16),
 
-              TextFormField(
-                controller: _departmentController,
+              // Dropdown phòng ban
+              DropdownButtonFormField<String>(
+                value: _selectedDepartment,
                 decoration: const InputDecoration(
-                  labelText: 'Phòng ban',
-                  hintText: 'VD: Kỹ thuật',
+                  labelText: 'Phòng ban *',
                   border: OutlineInputBorder(),
                   prefixIcon: Icon(Icons.business),
                 ),
+                hint: const Text('Chọn phòng ban'),
+                items: _departments.map((dept) {
+                  return DropdownMenuItem(value: dept, child: Text(dept));
+                }).toList(),
+                onChanged: (value) {
+                  setState(() {
+                    _selectedDepartment = value;
+                    // Tự động tạo mã nhân viên khi chọn phòng ban
+                    if (value != null) {
+                      _loadNextEmployeeId(value);
+                    }
+                  });
+                },
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Vui lòng chọn phòng ban';
+                  }
+                  return null;
+                },
               ),
 
               const SizedBox(height: 16),
 
-              TextFormField(
-                controller: _positionController,
+              // Dropdown chức vụ
+              DropdownButtonFormField<String>(
+                value: _selectedPosition,
                 decoration: const InputDecoration(
                   labelText: 'Chức vụ',
-                  hintText: 'VD: Lập trình viên',
                   border: OutlineInputBorder(),
                   prefixIcon: Icon(Icons.work),
                 ),
+                hint: const Text('Chọn chức vụ'),
+                items: _positions.map((pos) {
+                  return DropdownMenuItem(value: pos, child: Text(pos));
+                }).toList(),
+                onChanged: (value) {
+                  setState(() {
+                    _selectedPosition = value;
+                  });
+                },
               ),
 
               const SizedBox(height: 32),
