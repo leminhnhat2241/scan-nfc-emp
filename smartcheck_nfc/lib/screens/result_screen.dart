@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/attendance.dart';
@@ -400,23 +401,30 @@ class _ResultScreenState extends State<ResultScreen> {
                                         style: const TextStyle(
                                           fontSize: 16,
                                           fontWeight: FontWeight.bold,
-                                          color: Color(0xFF212121),
+                                          color: Color(0xFF1A1A1A),
+                                          letterSpacing: 0.15,
+                                          height: 1.4,
                                         ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
                                       ),
-                                      const SizedBox(height: 4),
+                                      const SizedBox(height: 6),
                                       Row(
                                         children: [
                                           Icon(
                                             Icons.badge_outlined,
-                                            size: 14,
+                                            size: 15,
                                             color: Colors.grey[600],
                                           ),
-                                          const SizedBox(width: 4),
+                                          const SizedBox(width: 6),
                                           Text(
                                             attendance.employeeId,
                                             style: TextStyle(
                                               fontSize: 13,
+                                              fontWeight: FontWeight.w500,
                                               color: Colors.grey[600],
+                                              letterSpacing: 0.5,
+                                              height: 1.2,
                                             ),
                                           ),
                                         ],
@@ -432,53 +440,60 @@ class _ResultScreenState extends State<ResultScreen> {
                                     Text(
                                       attendance.getFormattedDate(),
                                       style: const TextStyle(
-                                        fontSize: 12,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w500,
                                         color: Color(0xFF757575),
+                                        letterSpacing: 0.2,
                                       ),
                                     ),
-                                    const SizedBox(height: 4),
+                                    const SizedBox(height: 6),
                                     Row(
                                       children: [
                                         Icon(
-                                          Icons.access_time,
-                                          size: 14,
+                                          Icons.access_time_rounded,
+                                          size: 16,
                                           color: isOnTime
                                               ? const Color(0xFF4CAF50)
                                               : const Color(0xFFFF9800),
                                         ),
-                                        const SizedBox(width: 4),
+                                        const SizedBox(width: 5),
                                         Text(
                                           attendance.getFormattedTime(),
                                           style: TextStyle(
-                                            fontSize: 15,
-                                            fontWeight: FontWeight.bold,
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w700,
                                             color: isOnTime
                                                 ? const Color(0xFF4CAF50)
                                                 : const Color(0xFFFF9800),
+                                            letterSpacing: 0.5,
+                                            fontFeatures: const [
+                                              FontFeature.tabularFigures(),
+                                            ],
                                           ),
                                         ),
                                       ],
                                     ),
-                                    const SizedBox(height: 4),
+                                    const SizedBox(height: 6),
                                     Container(
                                       padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 4,
+                                        horizontal: 10,
+                                        vertical: 5,
                                       ),
                                       decoration: BoxDecoration(
                                         color: isOnTime
                                             ? const Color(0xFFE8F5E9)
                                             : const Color(0xFFFFF3E0),
-                                        borderRadius: BorderRadius.circular(10),
+                                        borderRadius: BorderRadius.circular(12),
                                       ),
                                       child: Text(
                                         attendance.status,
                                         style: TextStyle(
-                                          fontSize: 11,
+                                          fontSize: 12,
                                           fontWeight: FontWeight.bold,
                                           color: isOnTime
                                               ? const Color(0xFF4CAF50)
                                               : const Color(0xFFFF9800),
+                                          letterSpacing: 0.3,
                                         ),
                                       ),
                                     ),

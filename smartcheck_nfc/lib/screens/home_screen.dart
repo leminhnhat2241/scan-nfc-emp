@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/attendance.dart';
@@ -474,23 +475,30 @@ class _HomeScreenState extends State<HomeScreen> {
                                         style: const TextStyle(
                                           fontSize: 16,
                                           fontWeight: FontWeight.bold,
-                                          color: Color(0xFF212121),
+                                          color: Color(0xFF1A1A1A),
+                                          letterSpacing: 0.15,
+                                          height: 1.4,
                                         ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
                                       ),
-                                      const SizedBox(height: 4),
+                                      const SizedBox(height: 6),
                                       Row(
                                         children: [
                                           Icon(
                                             Icons.badge_outlined,
-                                            size: 14,
+                                            size: 15,
                                             color: Colors.grey[600],
                                           ),
-                                          const SizedBox(width: 4),
+                                          const SizedBox(width: 6),
                                           Text(
                                             attendance.employeeId,
                                             style: TextStyle(
                                               fontSize: 13,
+                                              fontWeight: FontWeight.w500,
                                               color: Colors.grey[600],
+                                              letterSpacing: 0.5,
+                                              height: 1.2,
                                             ),
                                           ),
                                         ],
@@ -506,45 +514,50 @@ class _HomeScreenState extends State<HomeScreen> {
                                     Row(
                                       children: [
                                         Icon(
-                                          Icons.access_time,
-                                          size: 16,
+                                          Icons.access_time_rounded,
+                                          size: 18,
                                           color: isOnTime
                                               ? const Color(0xFF4CAF50)
                                               : const Color(0xFFFF9800),
                                         ),
-                                        const SizedBox(width: 4),
+                                        const SizedBox(width: 6),
                                         Text(
                                           attendance.getFormattedTime(),
                                           style: TextStyle(
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.bold,
+                                            fontSize: 17,
+                                            fontWeight: FontWeight.w700,
                                             color: isOnTime
                                                 ? const Color(0xFF4CAF50)
                                                 : const Color(0xFFFF9800),
+                                            letterSpacing: 0.5,
+                                            fontFeatures: const [
+                                              FontFeature.tabularFigures(),
+                                            ],
                                           ),
                                         ),
                                       ],
                                     ),
-                                    const SizedBox(height: 4),
+                                    const SizedBox(height: 6),
                                     Container(
                                       padding: const EdgeInsets.symmetric(
-                                        horizontal: 10,
-                                        vertical: 4,
+                                        horizontal: 12,
+                                        vertical: 6,
                                       ),
                                       decoration: BoxDecoration(
                                         color: isOnTime
                                             ? const Color(0xFFE8F5E9)
                                             : const Color(0xFFFFF3E0),
-                                        borderRadius: BorderRadius.circular(12),
+                                        borderRadius: BorderRadius.circular(16),
                                       ),
                                       child: Text(
                                         attendance.status,
                                         style: TextStyle(
-                                          fontSize: 12,
+                                          fontSize: 13,
                                           fontWeight: FontWeight.bold,
                                           color: isOnTime
                                               ? const Color(0xFF4CAF50)
                                               : const Color(0xFFFF9800),
+                                          letterSpacing: 0.3,
                                         ),
                                       ),
                                     ),
