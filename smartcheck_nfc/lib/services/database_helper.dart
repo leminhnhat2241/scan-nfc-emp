@@ -19,7 +19,22 @@ class DatabaseHelper {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, filePath);
 
-    return await openDatabase(path, version: 1, onCreate: _createDB);
+    return await openDatabase(
+      path,
+      version: 2,
+      onCreate: _createDB,
+      onUpgrade: _upgradeDB,
+    );
+  }
+
+  Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      // Thêm cột image_path vào bảng attendance
+      await db.execute('''
+        ALTER TABLE attendance ADD COLUMN image_path TEXT
+      ''');
+      print('✅ Database upgraded: Đã thêm cột image_path');
+    }
   }
 
   Future<void> _createDB(Database db, int version) async {
@@ -41,6 +56,7 @@ class DatabaseHelper {
         employee_name TEXT NOT NULL,
         check_in_time TEXT NOT NULL,
         status TEXT NOT NULL,
+        image_path TEXT,
         FOREIGN KEY (employee_id) REFERENCES employees (employee_id)
       )
     ''');

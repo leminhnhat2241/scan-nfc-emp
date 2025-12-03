@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/employee.dart';
 import '../models/attendance.dart';
 import '../services/database_helper.dart';
+import '../services/google_sheets_service.dart';
 
 class EmployeeListScreen extends StatefulWidget {
   const EmployeeListScreen({super.key});
@@ -12,6 +13,7 @@ class EmployeeListScreen extends StatefulWidget {
 
 class _EmployeeListScreenState extends State<EmployeeListScreen> {
   final DatabaseHelper _dbHelper = DatabaseHelper.instance;
+  final GoogleSheetsService _sheetsService = GoogleSheetsService.instance;
 
   List<Employee> _employees = [];
   Map<String, bool> _attendanceStatus = {};
@@ -45,6 +47,88 @@ class _EmployeeListScreenState extends State<EmployeeListScreen> {
       _attendanceStatus = attendanceStatus;
       _isLoading = false;
     });
+  }
+
+  /// Đồng bộ danh sách nhân viên lên Google Sheets
+  Future<void> _syncEmployeesToSheets() async {
+    if (_employees.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⚠️ Không có nhân viên để đồng bộ'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    // Hiển thị loading dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Dialog(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(),
+              const SizedBox(height: 16),
+              Text(
+                '☁️ Đang đồng bộ ${_employees.length} nhân viên...',
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final success = await _sheetsService.syncEmployeeList(_employees);
+
+      if (mounted) Navigator.pop(context); // Đóng loading dialog
+
+      if (success) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '✅ Đã đồng bộ ${_employees.length} nhân viên lên Google Sheets',
+              ),
+              backgroundColor: Colors.green,
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                '❌ Đồng bộ thất bại. Vui lòng kiểm tra kết nối mạng',
+              ),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) Navigator.pop(context); // Đóng loading dialog
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Lỗi: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _showEmployeeDetails(Employee employee) async {
@@ -336,6 +420,13 @@ class _EmployeeListScreenState extends State<EmployeeListScreen> {
         ),
         backgroundColor: const Color(0xFF2196F3),
         foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.cloud_upload_outlined),
+            onPressed: _syncEmployeesToSheets,
+            tooltip: 'Đồng bộ lên Google Sheets',
+          ),
+        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())

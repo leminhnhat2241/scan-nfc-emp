@@ -3,9 +3,14 @@ import 'package:intl/intl.dart';
 import '../models/attendance.dart';
 import '../services/database_helper.dart';
 import '../services/nfc_service.dart';
+import '../services/tts_service.dart';
+import '../services/camera_service.dart';
+import '../services/google_sheets_service.dart';
 import 'write_nfc_screen.dart';
 import 'employee_list_screen.dart';
 import 'result_screen.dart';
+import 'analytics_screen.dart';
+import 'photo_viewer_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -17,6 +22,9 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final NfcService _nfcService = NfcService();
   final DatabaseHelper _dbHelper = DatabaseHelper.instance;
+  final TtsService _ttsService = TtsService.instance;
+  final CameraService _cameraService = CameraService.instance;
+  final GoogleSheetsService _sheetsService = GoogleSheetsService.instance;
 
   List<Attendance> _todayAttendance = [];
   bool _isLoading = false;
@@ -27,6 +35,12 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _checkNfcAvailability();
     _loadTodayAttendance();
+    _initializeCamera();
+  }
+
+  Future<void> _initializeCamera() async {
+    // Khởi tạo camera ngầm để sẵn sàng chụp khi cần
+    await _cameraService.initialize();
   }
 
   Future<void> _checkNfcAvailability() async {
@@ -55,13 +69,58 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    _showMessage('Vui lòng đưa thẻ NFC đến điện thoại...', isInfo: true);
+    // Hiển thị loading dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Dialog(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(),
+              const SizedBox(height: 16),
+              const Text(
+                '🔍 Đang chờ thẻ NFC...',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Vui lòng đưa thẻ gần camera sau điện thoại',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
 
     try {
-      final employee = await _nfcService.readNfcTag();
+      final employee = await _nfcService.readNfcTag().timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          if (mounted) Navigator.pop(context);
+          _showErrorDialog(
+            'Hết thời gian chờ',
+            'Không phát hiện thẻ NFC sau 30 giây.\n\nVui lòng thử lại và giữ thẻ gần điện thoại.',
+          );
+          return null;
+        },
+      );
+
+      // Đóng loading dialog
+      if (mounted) Navigator.pop(context);
 
       if (employee == null) {
-        _showMessage('Không đọc được thông tin từ thẻ', isError: true);
+        // Phát giọng nói thông báo thẻ không hợp lệ
+        await _ttsService.speakError('invalid');
+
+        _showErrorDialog(
+          'Không đọc được thẻ',
+          'Vui lòng thử lại và giữ thẻ gần điện thoại lâu hơn.',
+        );
         return;
       }
 
@@ -70,11 +129,9 @@ class _HomeScreenState extends State<HomeScreen> {
         employee.employeeId,
       );
       if (existingEmployee == null) {
-        _showMessage(
-          'Nhân viên ${employee.employeeId} không tồn tại',
-          isError: true,
-        );
-        return;
+        // Tự động thêm nhân viên mới vào database
+        await _dbHelper.insertEmployee(employee);
+        print('✅ Đã tự động thêm nhân viên: ${employee.employeeId}');
       }
 
       // Kiểm tra đã điểm danh hôm nay chưa
@@ -82,20 +139,38 @@ class _HomeScreenState extends State<HomeScreen> {
         employee.employeeId,
       );
       if (hasCheckedIn) {
-        _showMessage(
-          '${employee.name} đã điểm danh hôm nay rồi!',
-          isError: true,
+        // Phát giọng nói thông báo trùng
+        await _ttsService.speakError('duplicate');
+
+        _showWarningDialog(
+          'Đã điểm danh',
+          '${employee.name} đã điểm danh hôm nay rồi!\n\nKhông thể điểm danh lại.',
         );
         return;
       }
 
       // Lưu điểm danh
       final now = DateTime.now();
+
+      // Chụp ảnh xác thực tự động (Anti-Fraud)
+      String? capturedImagePath;
+      try {
+        capturedImagePath = await _cameraService.captureAntiSpoofingImage(
+          employee.employeeId,
+        );
+        if (capturedImagePath != null) {
+          print('📸 Đã chụp ảnh xác thực: $capturedImagePath');
+        }
+      } catch (e) {
+        print('⚠️ Không chụp được ảnh: $e (Vẫn tiếp tục điểm danh)');
+      }
+
       final attendance = Attendance(
         employeeId: employee.employeeId,
         employeeName: employee.name,
         checkInTime: now,
         status: _getAttendanceStatus(now),
+        imagePath: capturedImagePath,
       );
 
       await _dbHelper.insertAttendance(attendance);
@@ -103,10 +178,31 @@ class _HomeScreenState extends State<HomeScreen> {
       // Reload danh sách
       await _loadTodayAttendance();
 
+      // Đồng bộ lên Google Sheets (chạy nền, không chặn UI)
+      _sheetsService.syncAttendance(attendance).then((success) {
+        if (success) {
+          print('✅ Đã đồng bộ Google Sheets');
+        } else {
+          print(
+            '⚠️ Không đồng bộ được Google Sheets (không ảnh hưởng điểm danh)',
+          );
+        }
+      });
+
+      // Phát giọng nói thông báo điểm danh thành công
+      await _ttsService.speakAttendanceSuccess(
+        employee.name,
+        _getAttendanceStatus(now),
+      );
+
       // Hiển thị thông báo thành công
-      _showSuccessDialog(employee.name, now);
+      _showSuccessDialog(employee.name, now, _getAttendanceStatus(now));
     } catch (e) {
-      _showMessage('Lỗi: $e', isError: true);
+      // Đóng loading dialog nếu có lỗi
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+      _showErrorDialog('Lỗi hệ thống', 'Chi tiết: $e');
     }
   }
 
@@ -122,26 +218,90 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _showSuccessDialog(String employeeName, DateTime checkInTime) {
+  void _showSuccessDialog(
+    String employeeName,
+    DateTime checkInTime,
+    String status,
+  ) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         icon: const Icon(Icons.check_circle, color: Colors.green, size: 60),
-        title: const Text('Điểm danh thành công!'),
+        title: const Text('✅ Điểm danh thành công!'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              'Xin chào: $employeeName',
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              employeeName,
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: status == 'Đi làm'
+                    ? Colors.green.shade50
+                    : Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: status == 'Đi làm' ? Colors.green : Colors.orange,
+                ),
+              ),
+              child: Text(
+                status,
+                style: TextStyle(
+                  color: status == 'Đi làm'
+                      ? Colors.green.shade700
+                      : Colors.orange.shade700,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
             Text(
-              'Thời gian: ${DateFormat('HH:mm - dd/MM/yyyy').format(checkInTime)}',
-              style: const TextStyle(fontSize: 16),
+              DateFormat('HH:mm:ss').format(checkInTime),
+              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            ),
+            Text(
+              DateFormat('dd/MM/yyyy').format(checkInTime),
+              style: const TextStyle(fontSize: 14, color: Colors.grey),
             ),
           ],
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Đóng', style: TextStyle(fontSize: 16)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showErrorDialog(String title, String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.error_outline, color: Colors.red, size: 60),
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Đóng'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showWarningDialog(String title, String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.warning_amber, color: Colors.orange, size: 60),
+        title: Text(title),
+        content: Text(message),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -183,6 +343,30 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: const Color(0xFF2196F3),
         foregroundColor: Colors.white,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.photo_library_outlined),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const PhotoViewerScreen(),
+                ),
+              );
+            },
+            tooltip: 'Xem ảnh điểm danh',
+          ),
+          IconButton(
+            icon: const Icon(Icons.bar_chart),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const AnalyticsScreen(),
+                ),
+              );
+            },
+            tooltip: 'Thống kê',
+          ),
           IconButton(
             icon: const Icon(Icons.analytics_outlined),
             onPressed: () {

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/employee.dart';
 import '../services/database_helper.dart';
 import '../services/nfc_service.dart';
+import 'dart:async';
 
 class WriteNfcScreen extends StatefulWidget {
   const WriteNfcScreen({super.key});
@@ -75,17 +76,44 @@ class _WriteNfcScreenState extends State<WriteNfcScreen> {
       // Lưu vào database trước
       await _dbHelper.insertEmployee(employee);
 
-      // Hiển thị hướng dẫn
-      _showMessage('Vui lòng đưa thẻ NFC đến điện thoại...', isInfo: true);
+      // Hiển thị dialog hướng dẫn và chờ người dùng sẵn sàng
+      final shouldContinue = await _showReadyDialog();
+      if (!shouldContinue) {
+        setState(() {
+          _isWriting = false;
+        });
+        return;
+      }
 
-      // Ghi vào thẻ NFC
-      final success = await _nfcService.writeNfcTag(employee);
+      // Hiển thị trạng thái đang chờ thẻ
+      _showMessage(
+        '🔍 Đang chờ thẻ NFC... Hãy đưa thẻ gần camera sau và giữ yên!',
+        isInfo: true,
+      );
 
-      if (success) {
+      // Ghi vào thẻ NFC với timeout
+      final result = await _nfcService
+          .writeNfcTag(employee)
+          .timeout(
+            const Duration(seconds: 30),
+            onTimeout: () {
+              return NfcWriteResult(
+                false,
+                'Hết thời gian chờ 30 giây. Chưa phát hiện thẻ NFC. Vui lòng:\n• Kiểm tra NFC đã bật\n• Đặt thẻ sát vào lưng điện thoại\n• Thử lại',
+              );
+            },
+          );
+
+      if (result.success) {
         _showSuccessDialog(employee);
         _clearForm();
       } else {
-        _showMessage('Ghi thẻ thất bại, vui lòng thử lại', isError: true);
+        _showMessage(
+          result.message.isNotEmpty
+              ? result.message
+              : 'Ghi thẻ thất bại, vui lòng thử lại',
+          isError: true,
+        );
       }
     } catch (e) {
       _showMessage('Lỗi: $e', isError: true);
@@ -101,6 +129,106 @@ class _WriteNfcScreenState extends State<WriteNfcScreen> {
     _nameController.clear();
     _departmentController.clear();
     _positionController.clear();
+  }
+
+  Future<bool> _showReadyDialog() async {
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.nfc, color: Colors.blue, size: 60),
+        title: const Text('Chuẩn bị ghi thẻ NFC'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Hãy chuẩn bị thẻ NFC và làm theo hướng dẫn:',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            _buildInstructionRow('1', 'Cầm thẻ NFC sẵn sàng'),
+            _buildInstructionRow('2', 'Nhấn nút "BẮT ĐẦU GHI"'),
+            _buildInstructionRow(
+              '3',
+              'Đặt thẻ sát vào lưng điện thoại (gần camera sau)',
+            ),
+            _buildInstructionRow(
+              '4',
+              'Giữ yên 3-5 giây cho đến khi thành công',
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.amber.shade200),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.warning_amber, color: Colors.orange, size: 20),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Lưu ý: Không di chuyển thẻ khi đang ghi!',
+                      style: TextStyle(fontSize: 12, color: Colors.orange),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('HỦY'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.play_arrow),
+            label: const Text('BẮT ĐẦU GHI'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blue,
+              foregroundColor: Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  Widget _buildInstructionRow(String number, String text) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 24,
+            height: 24,
+            decoration: BoxDecoration(
+              color: Colors.blue,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Center(
+              child: Text(
+                number,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(child: Text(text, style: const TextStyle(fontSize: 14))),
+        ],
+      ),
+    );
   }
 
   void _showSuccessDialog(Employee employee) {
@@ -189,9 +317,16 @@ class _WriteNfcScreenState extends State<WriteNfcScreen> {
                       const SizedBox(height: 8),
                       const Text('1. Điền đầy đủ thông tin nhân viên'),
                       const Text('2. Nhấn nút "GHI VÀO THẺ NFC"'),
-                      const Text('3. Đưa thẻ NFC đến điện thoại'),
+                      const Text('3. Chạm thẻ NFC gần camera sau điện thoại'),
                       const Text(
-                        '4. Giữ thẻ cho đến khi có thông báo thành công',
+                        '4. Giữ thẻ ổn định cho đến khi có thông báo thành công (khoảng 3-5 giây)',
+                      ),
+                      const Text(
+                        '5. Lưu ý: Vị trí anten NFC thường ở gần camera sau',
+                        style: TextStyle(
+                          fontStyle: FontStyle.italic,
+                          fontSize: 12,
+                        ),
                       ),
                     ],
                   ),

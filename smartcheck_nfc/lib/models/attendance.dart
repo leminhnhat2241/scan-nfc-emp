@@ -4,6 +4,7 @@ class Attendance {
   final String employeeName;
   final DateTime checkInTime;
   final String status; // "Đi làm", "Đi muộn", "Về sớm"
+  final String? imagePath; // Đường dẫn ảnh chụp tự động (Anti-Fraud)
 
   Attendance({
     this.id,
@@ -11,6 +12,7 @@ class Attendance {
     required this.employeeName,
     required this.checkInTime,
     this.status = "Đi làm",
+    this.imagePath,
   });
 
   // Chuyển đổi từ Map sang Attendance
@@ -21,6 +23,7 @@ class Attendance {
       employeeName: map['employee_name'] as String,
       checkInTime: DateTime.parse(map['check_in_time'] as String),
       status: map['status'] as String? ?? "Đi làm",
+      imagePath: map['image_path'] as String?,
     );
   }
 
@@ -32,6 +35,7 @@ class Attendance {
       'employee_name': employeeName,
       'check_in_time': checkInTime.toIso8601String(),
       'status': status,
+      'image_path': imagePath,
     };
   }
 
@@ -46,6 +50,6 @@ class Attendance {
 
   @override
   String toString() {
-    return 'Attendance{id: $id, employeeId: $employeeId, employeeName: $employeeName, checkInTime: $checkInTime, status: $status}';
+    return 'Attendance{id: $id, employeeId: $employeeId, employeeName: $employeeName, checkInTime: $checkInTime, status: $status, imagePath: $imagePath}';
   }
 }
