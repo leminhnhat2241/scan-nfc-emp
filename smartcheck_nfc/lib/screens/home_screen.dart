@@ -209,9 +209,9 @@ class _HomeScreenState extends State<HomeScreen> {
   String _getAttendanceStatus(DateTime checkInTime) {
     final hour = checkInTime.hour;
     final minute = checkInTime.minute;
-
-    // Quy định: đi làm trước 8:30 là đúng giờ, sau 8:30 là đi muộn
-    if (hour < 8 || (hour == 8 && minute <= 30)) {
+    // Tùy chỉnh giờ làm việc
+    // Quy định: đi làm trước 11:30 là đúng giờ, sau 11:30 là đi muộn
+    if (hour < 11 || (hour == 11 && minute <= 30)) {
       return 'Đi làm';
     } else {
       return 'Đi muộn';
