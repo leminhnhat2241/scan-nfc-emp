@@ -21,7 +21,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 2,
+      version: 3, // Nâng version lên 3
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -29,26 +29,41 @@ class DatabaseHelper {
 
   Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
-      // Thêm cột image_path vào bảng attendance
       await db.execute('''
         ALTER TABLE attendance ADD COLUMN image_path TEXT
       ''');
-      print('✅ Database upgraded: Đã thêm cột image_path');
+    }
+    
+    // Nâng cấp version 3: Thêm Check-out và Lương
+    if (oldVersion < 3) {
+      // Bảng employees: Thêm email, salary_rate, is_active
+      await db.execute('ALTER TABLE employees ADD COLUMN email TEXT');
+      await db.execute('ALTER TABLE employees ADD COLUMN salary_rate REAL');
+      await db.execute('ALTER TABLE employees ADD COLUMN is_active INTEGER DEFAULT 1');
+
+      // Bảng attendance: Thêm check_out_time, work_hours
+      await db.execute('ALTER TABLE attendance ADD COLUMN check_out_time TEXT');
+      await db.execute('ALTER TABLE attendance ADD COLUMN work_hours REAL');
+      
+      print('✅ Database upgraded to v3: Added salary & email fields');
     }
   }
 
   Future<void> _createDB(Database db, int version) async {
-    // Bảng nhân viên
+    // Bảng nhân viên (Full schema v3)
     await db.execute('''
       CREATE TABLE employees (
         employee_id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         department TEXT,
-        position TEXT
+        position TEXT,
+        email TEXT,
+        salary_rate REAL,
+        is_active INTEGER DEFAULT 1
       )
     ''');
 
-    // Bảng điểm danh
+    // Bảng điểm danh (Full schema v3)
     await db.execute('''
       CREATE TABLE attendance (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,16 +72,21 @@ class DatabaseHelper {
         check_in_time TEXT NOT NULL,
         status TEXT NOT NULL,
         image_path TEXT,
+        check_out_time TEXT,
+        work_hours REAL,
         FOREIGN KEY (employee_id) REFERENCES employees (employee_id)
       )
     ''');
 
-    // Thêm một số nhân viên mẫu
+    // Dữ liệu mẫu
     await db.insert('employees', {
       'employee_id': 'EMP001',
       'name': 'Nguyễn Văn A',
       'department': 'Kỹ thuật',
       'position': 'Lập trình viên',
+      'email': 'nv.a@example.com',
+      'salary_rate': 50000.0,
+      'is_active': 1
     });
 
     await db.insert('employees', {
@@ -74,13 +94,9 @@ class DatabaseHelper {
       'name': 'Trần Thị B',
       'department': 'Nhân sự',
       'position': 'Trưởng phòng',
-    });
-
-    await db.insert('employees', {
-      'employee_id': 'EMP003',
-      'name': 'Lê Văn C',
-      'department': 'Kỹ thuật',
-      'position': 'Tester',
+      'email': 'tt.b@example.com',
+      'salary_rate': 70000.0,
+      'is_active': 1
     });
   }
 
@@ -96,10 +112,14 @@ class DatabaseHelper {
     );
   }
 
-  // Lấy tất cả nhân viên
-  Future<List<Employee>> getAllEmployees() async {
+  // Lấy tất cả nhân viên (mặc định lấy cả người đã nghỉ)
+  Future<List<Employee>> getAllEmployees({bool activeOnly = false}) async {
     final db = await database;
-    final List<Map<String, dynamic>> maps = await db.query('employees');
+    final whereClause = activeOnly ? 'is_active = 1' : null;
+    final List<Map<String, dynamic>> maps = await db.query(
+      'employees', 
+      where: whereClause
+    );
     return List.generate(maps.length, (i) => Employee.fromMap(maps[i]));
   }
 
@@ -126,8 +146,19 @@ class DatabaseHelper {
       whereArgs: [employee.employeeId],
     );
   }
+  
+  // Khóa/Mở khóa nhân viên (Soft Delete)
+  Future<void> toggleEmployeeStatus(String employeeId, bool isActive) async {
+    final db = await database;
+    await db.update(
+      'employees',
+      {'is_active': isActive ? 1 : 0},
+      where: 'employee_id = ?',
+      whereArgs: [employeeId],
+    );
+  }
 
-  // Xóa nhân viên
+  // Xóa nhân viên (Hard Delete - Chỉ dùng khi cần thiết)
   Future<void> deleteEmployee(String employeeId) async {
     final db = await database;
     await db.delete(
@@ -139,13 +170,24 @@ class DatabaseHelper {
 
   // === QUẢN LÝ ĐIỂM DANH ===
 
-  // Thêm bản ghi điểm danh
+  // Thêm bản ghi điểm danh (Check-in)
   Future<int> insertAttendance(Attendance attendance) async {
     final db = await database;
     return await db.insert(
       'attendance',
       attendance.toMap(),
       conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+  
+  // Cập nhật bản ghi điểm danh (Dùng cho Check-out hoặc Admin sửa)
+  Future<void> updateAttendance(Attendance attendance) async {
+    final db = await database;
+    await db.update(
+      'attendance',
+      attendance.toMap(),
+      where: 'id = ?',
+      whereArgs: [attendance.id],
     );
   }
 
@@ -173,8 +215,24 @@ class DatabaseHelper {
     );
     return List.generate(maps.length, (i) => Attendance.fromMap(maps[i]));
   }
+  
+  // Lấy điểm danh theo khoảng thời gian (cho Báo cáo)
+  Future<List<Attendance>> getAttendanceByRange(DateTime start, DateTime end) async {
+    final db = await database;
+    // Đảm bảo lấy trọn vẹn ngày
+    final startTime = DateTime(start.year, start.month, start.day);
+    final endTime = DateTime(end.year, end.month, end.day, 23, 59, 59);
+    
+    final List<Map<String, dynamic>> maps = await db.query(
+      'attendance',
+      where: 'check_in_time >= ? AND check_in_time <= ?',
+      whereArgs: [startTime.toIso8601String(), endTime.toIso8601String()],
+      orderBy: 'check_in_time ASC',
+    );
+    return List.generate(maps.length, (i) => Attendance.fromMap(maps[i]));
+  }
 
-  // Lấy điểm danh của nhân viên theo ngày
+  // Lấy điểm danh của nhân viên theo ngày (để check trùng hoặc check-out)
   Future<Attendance?> getAttendanceByEmployeeAndDate(
     String employeeId,
     DateTime date,

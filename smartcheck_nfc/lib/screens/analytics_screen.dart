@@ -1,14 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:printing/printing.dart'; // Mới
 import '../models/attendance.dart';
 import '../models/employee.dart';
 import '../services/database_helper.dart';
-import '../widgets/stats_card.dart';
-import '../widgets/attendance_chart.dart';
+import '../services/email_service.dart';
+import '../services/pdf_service.dart'; // Mới
 
-/// Màn hình Phân tích Thống kê Thông minh
-/// File con: lib/screens/analytics_screen.dart
-/// File mẹ: Được gọi từ lib/screens/home_screen.dart
 class AnalyticsScreen extends StatefulWidget {
   const AnalyticsScreen({super.key});
 
@@ -18,312 +16,345 @@ class AnalyticsScreen extends StatefulWidget {
 
 class _AnalyticsScreenState extends State<AnalyticsScreen> {
   final DatabaseHelper _dbHelper = DatabaseHelper.instance;
+  final EmailService _emailService = EmailService.instance;
+  final PdfService _pdfService = PdfService.instance;
 
-  List<Attendance> _todayAttendance = [];
-  List<Employee> _allEmployees = [];
-  Map<String, int> _last7DaysData = {};
-  bool _isLoading = true;
+  // Bộ lọc
+  String _timeFilter = 'Tuần này';
+  DateTimeRange? _dateRange;
+
+  // Dữ liệu thống kê
+  List<Attendance> _attendances = [];
+  Map<String, double> _salaryMap = {};
+  Map<String, double> _hoursMap = {};
+  Map<String, Employee> _employeeMap = {};
+  bool _isLoading = false;
 
   @override
   void initState() {
     super.initState();
+    _setInitialDateRange();
     _loadData();
   }
 
+  void _setInitialDateRange() {
+    final now = DateTime.now();
+    final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
+    final endOfWeek = startOfWeek.add(const Duration(days: 6));
+    _dateRange = DateTimeRange(start: startOfWeek, end: endOfWeek);
+  }
+
   Future<void> _loadData() async {
-    setState(() {
-      _isLoading = true;
-    });
+    if (_dateRange == null) return;
+    setState(() => _isLoading = true);
 
-    // Load dữ liệu hôm nay
-    final todayData = await _dbHelper.getAttendanceByDate(DateTime.now());
+    try {
+      final attendanceList = await _dbHelper.getAttendanceByRange(
+        _dateRange!.start,
+        _dateRange!.end,
+      );
 
-    // Load tất cả nhân viên
-    final employees = await _dbHelper.getAllEmployees();
+      final employees = await _dbHelper.getAllEmployees();
+      final empMap = {for (var e in employees) e.employeeId: e};
 
-    // Load dữ liệu 7 ngày gần nhất
-    final Map<String, int> dailyData = {};
-    for (int i = 6; i >= 0; i--) {
-      final date = DateTime.now().subtract(Duration(days: i));
-      final dayAttendance = await _dbHelper.getAttendanceByDate(date);
-      final dateKey = DateFormat('dd/MM').format(date);
-      dailyData[dateKey] = dayAttendance.length;
+      Map<String, double> salaryResult = {};
+      Map<String, double> hoursResult = {};
+
+      for (var att in attendanceList) {
+        if (att.workHours != null && att.workHours! > 0) {
+          final emp = empMap[att.employeeId];
+          final rate = emp?.salaryRate ?? 0.0;
+          
+          hoursResult[att.employeeId] = (hoursResult[att.employeeId] ?? 0) + att.workHours!;
+          salaryResult[att.employeeId] = (salaryResult[att.employeeId] ?? 0) + (att.workHours! * rate);
+        }
+      }
+
+      setState(() {
+        _attendances = attendanceList;
+        _employeeMap = empMap;
+        _salaryMap = salaryResult;
+        _hoursMap = hoursResult;
+        _isLoading = false;
+      });
+    } catch (e) {
+      print('Lỗi thống kê: $e');
+      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _pickDateRange() async {
+    final newRange = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now(),
+      initialDateRange: _dateRange,
+    );
+
+    if (newRange != null) {
+      setState(() {
+        _dateRange = newRange;
+        _timeFilter = 'Tùy chọn';
+      });
+      _loadData();
+    }
+  }
+
+  void _selectPreset(String preset) {
+    final now = DateTime.now();
+    DateTime start, end;
+
+    if (preset == 'Tuần này') {
+      start = now.subtract(Duration(days: now.weekday - 1));
+      end = start.add(const Duration(days: 6));
+    } else if (preset == 'Tháng này') {
+      start = DateTime(now.year, now.month, 1);
+      end = DateTime(now.year, now.month + 1, 0);
+    } else {
+      return;
     }
 
     setState(() {
-      _todayAttendance = todayData;
-      _allEmployees = employees;
-      _last7DaysData = dailyData;
-      _isLoading = false;
+      _timeFilter = preset;
+      _dateRange = DateTimeRange(start: start, end: end);
     });
+    _loadData();
+  }
+  
+  // Gửi email text đơn giản
+  Future<void> _sendEmailReport(String employeeId) async {
+    final employee = _employeeMap[employeeId];
+    if (employee == null) return;
+    
+    if (employee.email == null || employee.email!.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nhân viên này chưa cập nhật email!'), backgroundColor: Colors.red),
+      );
+      return;
+    }
+
+    final totalHours = _hoursMap[employeeId] ?? 0;
+    final totalSalary = _salaryMap[employeeId] ?? 0;
+    
+    final body = _emailService.generateSalaryReport(
+      employee, 
+      totalHours, 
+      totalSalary, 
+      _dateRange!.start, 
+      _dateRange!.end
+    );
+    
+    await _emailService.sendEmail(
+      toEmail: employee.email!,
+      subject: 'Báo cáo lương - SmartCheck NFC',
+      body: body,
+    );
   }
 
-  int get _totalEmployees => _allEmployees.length;
-  int get _presentToday => _todayAttendance.length;
-  int get _absentToday => _totalEmployees - _presentToday;
-  int get _onTimeCount =>
-      _todayAttendance.where((a) => a.status == 'Đi làm').length;
-  int get _lateCount =>
-      _todayAttendance.where((a) => a.status == 'Đi muộn').length;
+  // Xem trước và In PDF
+  Future<void> _previewPdf(String employeeId) async {
+    final employee = _employeeMap[employeeId];
+    if (employee == null) return;
 
-  double get _attendanceRate {
-    if (_totalEmployees == 0) return 0;
-    return (_presentToday / _totalEmployees) * 100;
+    final totalHours = _hoursMap[employeeId] ?? 0;
+    final totalSalary = _salaryMap[employeeId] ?? 0;
+
+    // Hiển thị dialog loading
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      // Tạo file PDF
+      final file = await _pdfService.generatePayslip(
+        employee, 
+        totalHours, 
+        totalSalary, 
+        _dateRange!.start, 
+        _dateRange!.end
+      );
+      
+      Navigator.pop(context); // Tắt loading
+
+      // Mở trình xem trước in ấn của hệ thống (Android/iOS native print)
+      await Printing.layoutPdf(
+        onLayout: (format) => file.readAsBytes(),
+        name: 'PhieuLuong_${employee.employeeId}',
+      );
+    } catch (e) {
+      Navigator.pop(context); // Tắt loading
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Lỗi tạo PDF: $e'), backgroundColor: Colors.red),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[100],
       appBar: AppBar(
-        elevation: 0,
-        title: const Text(
-          'Thống kê Thông minh',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-        backgroundColor: const Color(0xFF2196F3),
+        title: const Text('Báo cáo & Tính lương'),
+        backgroundColor: Colors.blue,
         foregroundColor: Colors.white,
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadData,
-            tooltip: 'Làm mới',
+            icon: const Icon(Icons.calendar_month),
+            onPressed: _pickDateRange,
+            tooltip: 'Chọn khoảng thời gian',
           ),
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _loadData,
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Tiêu đề ngày
-                    _buildDateHeader(),
-                    const SizedBox(height: 20),
-
-                    // Thống kê tổng quan (4 thẻ)
-                    _buildOverviewStats(),
-                    const SizedBox(height: 24),
-
-                    // Biểu đồ tròn: Phân bố trạng thái hôm nay
-                    _buildSectionTitle('Phân bố trạng thái hôm nay'),
-                    const SizedBox(height: 16),
-                    _buildPieChartSection(),
-                    const SizedBox(height: 24),
-
-                    // Biểu đồ cột: xu hướng 7 ngày
-                    _buildSectionTitle('Xu hướng 7 ngày gần nhất'),
-                    const SizedBox(height: 16),
-                    _buildBarChartSection(),
-                    const SizedBox(height: 24),
-
-                    // Top nhân viên đi muộn nhiều nhất (nếu có)
-                    if (_lateCount > 0) ...[
-                      _buildSectionTitle('⚠️ Nhân viên đi muộn hôm nay'),
-                      const SizedBox(height: 16),
-                      _buildLateEmployeesList(),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-    );
-  }
-
-  Widget _buildDateHeader() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF2196F3), Color(0xFF1976D2)],
-        ),
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.blue.withOpacity(0.3),
-            blurRadius: 8,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Row(
+      body: Column(
         children: [
-          const Icon(Icons.calendar_today, color: Colors.white, size: 32),
-          const SizedBox(width: 16),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                DateFormat(
-                  'EEEE, dd MMMM yyyy',
-                  'vi_VN',
-                ).format(DateTime.now()),
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
+          // Filter Bar
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+            color: Colors.grey[200],
+            child: Row(
+              children: [
+                _buildFilterChip('Tuần này'),
+                const SizedBox(width: 8),
+                _buildFilterChip('Tháng này'),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _dateRange != null
+                        ? '${DateFormat('dd/MM').format(_dateRange!.start)} - ${DateFormat('dd/MM').format(_dateRange!.end)}'
+                        : '',
+                    textAlign: TextAlign.right,
+                    style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Cập nhật lúc ${DateFormat('HH:mm').format(DateTime.now())}',
-                style: const TextStyle(color: Colors.white70, fontSize: 12),
-              ),
-            ],
+              ],
+            ),
           ),
-        ],
-      ),
-    );
-  }
 
-  Widget _buildOverviewStats() {
-    return GridView.count(
-      crossAxisCount: 2,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 12,
-      crossAxisSpacing: 12,
-      childAspectRatio: 1.5,
-      children: [
-        StatsCard(
-          title: 'Sĩ số',
-          value: '$_presentToday/$_totalEmployees',
-          icon: Icons.people,
-          color: Colors.blue,
-          subtitle: 'Tỷ lệ: ${_attendanceRate.toStringAsFixed(1)}%',
-        ),
-        StatsCard(
-          title: 'Vắng mặt',
-          value: '$_absentToday',
-          icon: Icons.person_off,
-          color: Colors.red,
-          subtitle: _absentToday == 0 ? 'Tuyệt vời!' : 'Cần kiểm tra',
-        ),
-        StatsCard(
-          title: 'Đúng giờ',
-          value: '$_onTimeCount',
-          icon: Icons.check_circle,
-          color: Colors.green,
-          subtitle: 'Đi làm đúng giờ',
-        ),
-        StatsCard(
-          title: 'Đi muộn',
-          value: '$_lateCount',
-          icon: Icons.access_time,
-          color: Colors.orange,
-          subtitle: _lateCount == 0 ? 'Không ai' : 'Sau 8:30',
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSectionTitle(String title) {
-    return Text(
-      title,
-      style: const TextStyle(
-        fontSize: 18,
-        fontWeight: FontWeight.bold,
-        color: Color(0xFF2196F3),
-      ),
-    );
-  }
-
-  Widget _buildPieChartSection() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 4,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: AttendancePieChart(
-        onTimeCount: _onTimeCount,
-        lateCount: _lateCount,
-        absentCount: _absentToday,
-      ),
-    );
-  }
-
-  Widget _buildBarChartSection() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 4,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: AttendanceBarChart(dailyData: _last7DaysData),
-    );
-  }
-
-  Widget _buildLateEmployeesList() {
-    final lateEmployees = _todayAttendance
-        .where((a) => a.status == 'Đi muộn')
-        .toList();
-    lateEmployees.sort((a, b) => b.checkInTime.compareTo(a.checkInTime));
-
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 4,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: ListView.separated(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        itemCount: lateEmployees.length,
-        separatorBuilder: (context, index) => const Divider(height: 1),
-        itemBuilder: (context, index) {
-          final attendance = lateEmployees[index];
-          return ListTile(
-            leading: CircleAvatar(
-              backgroundColor: Colors.orange.shade100,
-              child: Text(
-                attendance.employeeName.substring(0, 1).toUpperCase(),
-                style: TextStyle(
-                  color: Colors.orange.shade700,
-                  fontWeight: FontWeight.bold,
-                ),
+          // Tổng quan
+          if (!_isLoading) ...[
+             Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Row(
+                children: [
+                  _buildSummaryCard('Tổng giờ làm', _calculateTotalHours(), Colors.orange),
+                  const SizedBox(width: 16),
+                  _buildSummaryCard('Tổng lương chi', _calculateTotalSalary(), Colors.green),
+                ],
               ),
             ),
-            title: Text(
-              attendance.employeeName,
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-            subtitle: Text(attendance.employeeId),
-            trailing: Text(
-              DateFormat('HH:mm').format(attendance.checkInTime),
-              style: const TextStyle(
-                color: Colors.orange,
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-              ),
-            ),
-          );
-        },
+          ],
+          
+          const Divider(),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Align(alignment: Alignment.centerLeft, child: Text('Chi tiết nhân viên', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
+          ),
+
+          // List
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _salaryMap.isEmpty
+                    ? const Center(child: Text('Không có dữ liệu trong khoảng thời gian này'))
+                    : ListView.builder(
+                        itemCount: _salaryMap.length,
+                        itemBuilder: (context, index) {
+                          final empId = _salaryMap.keys.elementAt(index);
+                          final totalSalary = _salaryMap[empId]!;
+                          final totalHours = _hoursMap[empId] ?? 0;
+                          final employee = _employeeMap[empId];
+                          final name = employee?.name ?? 'Unknown';
+
+                          return Card(
+                            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            child: ListTile(
+                              leading: CircleAvatar(
+                                child: Text(name.isNotEmpty ? name[0] : '?'),
+                              ),
+                              title: Text(name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                              subtitle: Text('Giờ làm: ${totalHours.toStringAsFixed(1)}h'),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    '${NumberFormat("#,###").format(totalSalary)}',
+                                    style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 15),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  // Nút PDF
+                                  IconButton(
+                                    icon: const Icon(Icons.picture_as_pdf, color: Colors.red),
+                                    onPressed: () => _previewPdf(empId),
+                                    tooltip: 'Xuất PDF',
+                                    constraints: const BoxConstraints(), // Thu nhỏ vùng bấm
+                                    padding: const EdgeInsets.all(8),
+                                  ),
+                                  // Nút Email
+                                  IconButton(
+                                    icon: const Icon(Icons.email_outlined, color: Colors.blue),
+                                    onPressed: () => _sendEmailReport(empId),
+                                    tooltip: 'Gửi Email',
+                                    constraints: const BoxConstraints(),
+                                    padding: const EdgeInsets.all(8),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+          ),
+        ],
       ),
     );
+  }
+  
+  // (Giữ nguyên các hàm _buildFilterChip, _buildSummaryCard, _calculate...)
+  Widget _buildFilterChip(String label) {
+    final isSelected = _timeFilter == label;
+    return ChoiceChip(
+      label: Text(label),
+      selected: isSelected,
+      onSelected: (selected) {
+        if (selected) _selectPreset(label);
+      },
+    );
+  }
+
+  Widget _buildSummaryCard(String title, String value, Color color) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withOpacity(0.5)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: TextStyle(color: color.withOpacity(0.8), fontSize: 12)),
+            const SizedBox(height: 8),
+            Text(
+              value,
+              style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 18),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  String _calculateTotalSalary() {
+    double total = 0;
+    _salaryMap.values.forEach((v) => total += v);
+    return '${NumberFormat.compact().format(total)} đ';
+  }
+  
+  String _calculateTotalHours() {
+    double total = 0;
+    _hoursMap.values.forEach((v) => total += v);
+    return '${total.toStringAsFixed(1)}h';
   }
 }
