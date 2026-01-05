@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:printing/printing.dart'; // Mới
+import 'package:printing/printing.dart';
 import '../models/attendance.dart';
 import '../models/employee.dart';
 import '../services/database_helper.dart';
-import '../services/email_service.dart';
-import '../services/pdf_service.dart'; // Mới
+import '../services/google_sheets_service.dart'; // Dùng service này thay vì email_service
+import '../services/pdf_service.dart';
 
 class AnalyticsScreen extends StatefulWidget {
   const AnalyticsScreen({super.key});
@@ -16,7 +16,7 @@ class AnalyticsScreen extends StatefulWidget {
 
 class _AnalyticsScreenState extends State<AnalyticsScreen> {
   final DatabaseHelper _dbHelper = DatabaseHelper.instance;
-  final EmailService _emailService = EmailService.instance;
+  final GoogleSheetsService _sheetsService = GoogleSheetsService.instance; // Mới
   final PdfService _pdfService = PdfService.instance;
 
   // Bộ lọc
@@ -29,6 +29,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
   Map<String, double> _hoursMap = {};
   Map<String, Employee> _employeeMap = {};
   bool _isLoading = false;
+  bool _isSendingMail = false; // Trạng thái gửi mail
 
   @override
   void initState() {
@@ -121,7 +122,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     _loadData();
   }
   
-  // Gửi email text đơn giản
+  // Gửi email qua Google Sheets (Server-side)
   Future<void> _sendEmailReport(String employeeId) async {
     final employee = _employeeMap[employeeId];
     if (employee == null) return;
@@ -133,22 +134,39 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       return;
     }
 
+    setState(() => _isSendingMail = true);
+    
+    // Hiện thông báo đang gửi
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Đang gửi email tự động...'), duration: Duration(seconds: 2)),
+    );
+
     final totalHours = _hoursMap[employeeId] ?? 0;
     final totalSalary = _salaryMap[employeeId] ?? 0;
     
-    final body = _emailService.generateSalaryReport(
-      employee, 
-      totalHours, 
-      totalSalary, 
-      _dateRange!.start, 
-      _dateRange!.end
+    // Gọi Google Script để gửi mail
+    final success = await _sheetsService.sendEmailReport(
+      email: employee.email!,
+      employeeId: employee.employeeId,
+      employeeName: employee.name,
+      totalHours: totalHours,
+      salaryRate: employee.salaryRate ?? 0,
+      totalSalary: totalSalary,
+      startDate: _dateRange!.start,
+      endDate: _dateRange!.end,
     );
     
-    await _emailService.sendEmail(
-      toEmail: employee.email!,
-      subject: 'Báo cáo lương - SmartCheck NFC',
-      body: body,
-    );
+    setState(() => _isSendingMail = false);
+
+    if (success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('✅ Đã gửi email thành công!'), backgroundColor: Colors.green),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('❌ Gửi thất bại. Kiểm tra kết nối mạng.'), backgroundColor: Colors.red),
+      );
+    }
   }
 
   // Xem trước và In PDF
@@ -159,7 +177,6 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     final totalHours = _hoursMap[employeeId] ?? 0;
     final totalSalary = _salaryMap[employeeId] ?? 0;
 
-    // Hiển thị dialog loading
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -167,7 +184,6 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     );
 
     try {
-      // Tạo file PDF
       final file = await _pdfService.generatePayslip(
         employee, 
         totalHours, 
@@ -176,15 +192,14 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
         _dateRange!.end
       );
       
-      Navigator.pop(context); // Tắt loading
+      Navigator.pop(context);
 
-      // Mở trình xem trước in ấn của hệ thống (Android/iOS native print)
       await Printing.layoutPdf(
         onLayout: (format) => file.readAsBytes(),
         name: 'PhieuLuong_${employee.employeeId}',
       );
     } catch (e) {
-      Navigator.pop(context); // Tắt loading
+      Navigator.pop(context);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Lỗi tạo PDF: $e'), backgroundColor: Colors.red),
       );
@@ -206,111 +221,123 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          // Filter Bar
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-            color: Colors.grey[200],
-            child: Row(
-              children: [
-                _buildFilterChip('Tuần này'),
-                const SizedBox(width: 8),
-                _buildFilterChip('Tháng này'),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    _dateRange != null
-                        ? '${DateFormat('dd/MM').format(_dateRange!.start)} - ${DateFormat('dd/MM').format(_dateRange!.end)}'
-                        : '',
-                    textAlign: TextAlign.right,
-                    style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue),
+          Column(
+            children: [
+              // Filter Bar
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                color: Colors.grey[200],
+                child: Row(
+                  children: [
+                    _buildFilterChip('Tuần này'),
+                    const SizedBox(width: 8),
+                    _buildFilterChip('Tháng này'),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _dateRange != null
+                            ? '${DateFormat('dd/MM').format(_dateRange!.start)} - ${DateFormat('dd/MM').format(_dateRange!.end)}'
+                            : '',
+                        textAlign: TextAlign.right,
+                        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Tổng quan
+              if (!_isLoading) ...[
+                 Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Row(
+                    children: [
+                      _buildSummaryCard('Tổng giờ làm', _calculateTotalHours(), Colors.orange),
+                      const SizedBox(width: 16),
+                      _buildSummaryCard('Tổng lương chi', _calculateTotalSalary(), Colors.green),
+                    ],
                   ),
                 ),
               ],
-            ),
-          ),
+              
+              const Divider(),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Align(alignment: Alignment.centerLeft, child: Text('Chi tiết nhân viên', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
+              ),
 
-          // Tổng quan
-          if (!_isLoading) ...[
-             Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Row(
-                children: [
-                  _buildSummaryCard('Tổng giờ làm', _calculateTotalHours(), Colors.orange),
-                  const SizedBox(width: 16),
-                  _buildSummaryCard('Tổng lương chi', _calculateTotalSalary(), Colors.green),
-                ],
+              // List
+              Expanded(
+                child: _isLoading
+                    ? const Center(child: CircularProgressIndicator())
+                    : _salaryMap.isEmpty
+                        ? const Center(child: Text('Không có dữ liệu trong khoảng thời gian này'))
+                        : ListView.builder(
+                            itemCount: _salaryMap.length,
+                            itemBuilder: (context, index) {
+                              final empId = _salaryMap.keys.elementAt(index);
+                              final totalSalary = _salaryMap[empId]!;
+                              final totalHours = _hoursMap[empId] ?? 0;
+                              final employee = _employeeMap[empId];
+                              final name = employee?.name ?? 'Unknown';
+
+                              return Card(
+                                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                child: ListTile(
+                                  leading: CircleAvatar(
+                                    child: Text(name.isNotEmpty ? name[0] : '?'),
+                                  ),
+                                  title: Text(name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                                  subtitle: Text('Giờ làm: ${totalHours.toStringAsFixed(1)}h'),
+                                  trailing: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        '${NumberFormat("#,###").format(totalSalary)}',
+                                        style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 15),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      // Nút PDF
+                                      IconButton(
+                                        icon: const Icon(Icons.picture_as_pdf, color: Colors.red),
+                                        onPressed: _isSendingMail ? null : () => _previewPdf(empId),
+                                        tooltip: 'Xuất PDF',
+                                        constraints: const BoxConstraints(),
+                                        padding: const EdgeInsets.all(8),
+                                      ),
+                                      // Nút Email (Tự động)
+                                      IconButton(
+                                        icon: const Icon(Icons.send, color: Colors.blue),
+                                        onPressed: _isSendingMail ? null : () => _sendEmailReport(empId),
+                                        tooltip: 'Gửi Email Tự động',
+                                        constraints: const BoxConstraints(),
+                                        padding: const EdgeInsets.all(8),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+              ),
+            ],
+          ),
+          
+          // Overlay loading khi đang gửi mail
+          if (_isSendingMail)
+            Container(
+              color: Colors.black.withOpacity(0.3),
+              child: const Center(
+                child: CircularProgressIndicator(),
               ),
             ),
-          ],
-          
-          const Divider(),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Align(alignment: Alignment.centerLeft, child: Text('Chi tiết nhân viên', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
-          ),
-
-          // List
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _salaryMap.isEmpty
-                    ? const Center(child: Text('Không có dữ liệu trong khoảng thời gian này'))
-                    : ListView.builder(
-                        itemCount: _salaryMap.length,
-                        itemBuilder: (context, index) {
-                          final empId = _salaryMap.keys.elementAt(index);
-                          final totalSalary = _salaryMap[empId]!;
-                          final totalHours = _hoursMap[empId] ?? 0;
-                          final employee = _employeeMap[empId];
-                          final name = employee?.name ?? 'Unknown';
-
-                          return Card(
-                            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                            child: ListTile(
-                              leading: CircleAvatar(
-                                child: Text(name.isNotEmpty ? name[0] : '?'),
-                              ),
-                              title: Text(name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                              subtitle: Text('Giờ làm: ${totalHours.toStringAsFixed(1)}h'),
-                              trailing: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    '${NumberFormat("#,###").format(totalSalary)}',
-                                    style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 15),
-                                  ),
-                                  const SizedBox(width: 4),
-                                  // Nút PDF
-                                  IconButton(
-                                    icon: const Icon(Icons.picture_as_pdf, color: Colors.red),
-                                    onPressed: () => _previewPdf(empId),
-                                    tooltip: 'Xuất PDF',
-                                    constraints: const BoxConstraints(), // Thu nhỏ vùng bấm
-                                    padding: const EdgeInsets.all(8),
-                                  ),
-                                  // Nút Email
-                                  IconButton(
-                                    icon: const Icon(Icons.email_outlined, color: Colors.blue),
-                                    onPressed: () => _sendEmailReport(empId),
-                                    tooltip: 'Gửi Email',
-                                    constraints: const BoxConstraints(),
-                                    padding: const EdgeInsets.all(8),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-          ),
         ],
       ),
     );
   }
   
-  // (Giữ nguyên các hàm _buildFilterChip, _buildSummaryCard, _calculate...)
   Widget _buildFilterChip(String label) {
     final isSelected = _timeFilter == label;
     return ChoiceChip(

@@ -9,15 +9,15 @@ import '../services/tts_service.dart';
 import '../services/camera_service.dart';
 import '../services/google_sheets_service.dart';
 import '../services/biometric_service.dart';
-import '../services/settings_service.dart'; // Mới
+import '../services/settings_service.dart';
 import 'write_nfc_screen.dart';
 import 'employee_list_screen.dart';
 import 'result_screen.dart';
 import 'analytics_screen.dart';
 import 'photo_viewer_screen.dart';
 import 'manual_attendance_screen.dart';
-import 'settings_screen.dart'; // Mới
-import 'admin_login_screen.dart'; // Mới
+import 'settings_screen.dart';
+import 'admin_login_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -39,13 +39,16 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isNfcAvailable = false;
   bool _isBiometricAvailable = false;
 
+  IconData _bioIcon = Icons.fingerprint;
+  String _bioLabel = 'Sinh trắc';
+
   @override
   void initState() {
     super.initState();
     _checkAvailability();
     _loadTodayAttendance();
     _initializeCamera();
-    SettingsService.instance.initialize(); // Khởi tạo settings
+    SettingsService.instance.initialize();
   }
 
   Future<void> _initializeCamera() async {
@@ -55,6 +58,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _checkAvailability() async {
     final nfc = await _nfcService.isNfcAvailable();
     final bio = await _biometricService.isBiometricAvailable();
+    
     setState(() {
       _isNfcAvailable = nfc;
       _isBiometricAvailable = bio;
@@ -83,7 +87,6 @@ class _HomeScreenState extends State<HomeScreen> {
       Attendance? attendanceToSync;
 
       if (existingAttendance == null) {
-        // CHECK-IN
         String? capturedImagePath;
         try {
           capturedImagePath = await _cameraService.captureAntiSpoofingImage(employee.employeeId);
@@ -105,7 +108,6 @@ class _HomeScreenState extends State<HomeScreen> {
         attendanceToSync = attendance;
 
       } else if (existingAttendance.checkOutTime == null) {
-        // CHECK-OUT
         final workDuration = now.difference(existingAttendance.checkInTime);
         final workHours = workDuration.inMinutes / 60.0;
         
@@ -140,12 +142,10 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // --- LOGIC AUTH ---
   Future<void> _checkAdminAccess(VoidCallback onSuccess) async {
-    // 1. Thử xác thực vân tay trước (Nếu máy có vân tay)
     if (_isBiometricAvailable) {
       final authenticated = await _biometricService.authenticate(
-        reason: 'Quét vân tay Admin để truy cập',
+        reason: 'Quét Sinh trắc học Admin để truy cập',
       );
       if (authenticated) {
         onSuccess();
@@ -153,7 +153,6 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
-    // 2. Nếu vân tay thất bại hoặc không có -> Hiện màn hình nhập PIN
     if (!mounted) return;
     final result = await Navigator.push(
       context,
@@ -164,8 +163,6 @@ class _HomeScreenState extends State<HomeScreen> {
       onSuccess();
     }
   }
-
-  // ... (Giữ nguyên các hàm _startBiometricAuth, _scanNfcCard cũ)
   
   Future<void> _startBiometricAuth() async {
     final employees = await _dbHelper.getAllEmployees(activeOnly: true);
@@ -201,7 +198,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (selectedEmployee == null) return;
 
     final isAuthenticated = await _biometricService.authenticate(
-      reason: 'Xác thực để điểm danh cho ${selectedEmployee.name}',
+      reason: 'Xác thực sinh trắc học để điểm danh cho ${selectedEmployee.name}',
     );
 
     if (isAuthenticated) {
@@ -266,19 +263,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String _getAttendanceStatus(DateTime checkInTime) {
-    // Lấy cấu hình từ Settings
     final workStart = SettingsService.instance.workStartTime;
     final graceMinutes = SettingsService.instance.gracePeriodMinutes;
-    
-    // So sánh thời gian
     final checkInMinute = checkInTime.hour * 60 + checkInTime.minute;
     final limitMinute = workStart.hour * 60 + workStart.minute + graceMinutes;
-    
     if (checkInMinute <= limitMinute) return 'Đi làm';
     return 'Đi muộn';
   }
 
-  // --- HELPER DIALOGS ---
   void _showSuccessDialog(String name, DateTime time, String status, {bool isCheckIn = true, double? workHours, String method = 'NFC'}) {
     showDialog(context: context, builder: (ctx) => AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -302,139 +294,6 @@ class _HomeScreenState extends State<HomeScreen> {
   void _showWarningDialog(String title, String msg) => showDialog(context: context, builder: (ctx) => AlertDialog(title: Text(title), content: Text(msg), actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text("Đóng"))]));
   void _showMessage(String msg, {bool isError = false}) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: isError ? Colors.red : Colors.green));
 
-  // --- UI ---
-  @override
-  Widget build(BuildContext context) {
-    const primaryColor = Color(0xFF2563EB);
-    const bgColor = Color(0xFFF3F4F6);
-
-    return Scaffold(
-      backgroundColor: bgColor,
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: const Text('SmartCheck', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 24)),
-        centerTitle: false,
-        actions: [
-          _buildGlassIconButton(Icons.settings, () {
-             // Bảo mật: Yêu cầu xác thực Admin trước khi mở menu
-             _checkAdminAccess(() {
-                _showAdminMenu();
-             });
-          }),
-          const SizedBox(width: 16),
-        ],
-      ),
-      body: Stack(
-        children: [
-          Container(
-            height: 280,
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                colors: [Color(0xFF2563EB), Color(0xFF7C3AED)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.only(bottomLeft: Radius.circular(40), bottomRight: Radius.circular(40)),
-            ),
-          ),
-          
-          SafeArea(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(height: 10),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(DateFormat('EEEE, dd MMMM').format(DateTime.now()), style: TextStyle(color: Colors.white70, fontSize: 16)),
-                      const SizedBox(height: 20),
-                      Row(
-                        children: [
-                          _buildStatCard('Đã Check-in', '${_todayAttendance.length}', Icons.login, Colors.greenAccent),
-                          const SizedBox(width: 16),
-                          _buildStatCard('Đi Muộn', '${_todayAttendance.where((e) => e.status == 'Đi muộn').length}', Icons.timer, Colors.orangeAccent),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                
-                const SizedBox(height: 30),
-                
-                Expanded(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text("Hoạt động gần đây", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.grey[800])),
-                            IconButton(
-                                icon: Icon(Icons.refresh, color: primaryColor), 
-                                onPressed: _loadTodayAttendance
-                            )
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        Expanded(
-                          child: _todayAttendance.isEmpty
-                            ? _buildEmptyState()
-                            : ListView.builder(
-                                padding: EdgeInsets.only(bottom: 80),
-                                itemCount: _todayAttendance.length,
-                                itemBuilder: (context, index) {
-                                  return _buildTimelineItem(_todayAttendance[index]);
-                                },
-                              ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-      floatingActionButton: Padding(
-        padding: const EdgeInsets.only(bottom: 10),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            FloatingActionButton.extended(
-              heroTag: "nfc",
-              onPressed: _scanNfcCard,
-              icon: Icon(Icons.nfc),
-              label: Text("QUÉT THẺ"),
-              backgroundColor: Color(0xFF2563EB),
-            ),
-            if (_isBiometricAvailable) ...[
-              SizedBox(width: 16),
-              FloatingActionButton.extended(
-                heroTag: "bio",
-                onPressed: _startBiometricAuth,
-                icon: Icon(Icons.fingerprint),
-                label: Text("VÂN TAY"),
-                backgroundColor: Color(0xFF7C3AED),
-              ),
-            ]
-          ],
-        ),
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
-    );
-  }
-
-  // ... (Giữ nguyên các hàm _buildGlassIconButton, _buildStatCard, _buildTimelineItem, _buildEmptyState, _buildAdminBtn cũ)
-  
-  // Update _showAdminMenu để thêm nút Settings
   void _showAdminMenu() {
     showModalBottomSheet(
       context: context,
@@ -458,7 +317,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 _buildAdminBtn(Icons.people, "Nhân sự", Colors.blue, () => Navigator.push(context, MaterialPageRoute(builder: (_) => EmployeeListScreen()))),
                 _buildAdminBtn(Icons.bar_chart, "Thống kê", Colors.purple, () => Navigator.push(context, MaterialPageRoute(builder: (_) => AnalyticsScreen()))),
                 _buildAdminBtn(Icons.edit_calendar, "Thủ công", Colors.orange, () => Navigator.push(context, MaterialPageRoute(builder: (_) => ManualAttendanceScreen()))),
-                _buildAdminBtn(Icons.settings, "Cấu hình", Colors.grey, () => Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen()))), // Nút mới
+                _buildAdminBtn(Icons.settings, "Cấu hình", Colors.grey, () => Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen()))),
               ],
             ),
             SizedBox(height: 20),
@@ -493,7 +352,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
-  
+
   Widget _buildGlassIconButton(IconData icon, VoidCallback onTap) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(12),
@@ -635,6 +494,134 @@ class _HomeScreenState extends State<HomeScreen> {
           Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
         ],
       ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const primaryColor = Color(0xFF2563EB);
+    const bgColor = Color(0xFFF3F4F6);
+
+    return Scaffold(
+      backgroundColor: bgColor,
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        title: const Text('SmartCheck', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 24)),
+        centerTitle: false,
+        actions: [
+          _buildGlassIconButton(Icons.settings, () {
+             _checkAdminAccess(() {
+                _showAdminMenu();
+             });
+          }),
+          const SizedBox(width: 16),
+        ],
+      ),
+      body: Stack(
+        children: [
+          Container(
+            height: 280,
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Color(0xFF2563EB), Color(0xFF7C3AED)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.only(bottomLeft: Radius.circular(40), bottomRight: Radius.circular(40)),
+            ),
+          ),
+          
+          SafeArea(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 10),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(DateFormat('EEEE, dd MMMM').format(DateTime.now()), style: TextStyle(color: Colors.white70, fontSize: 16)),
+                      const SizedBox(height: 20),
+                      Row(
+                        children: [
+                          _buildStatCard('Đã Check-in', '${_todayAttendance.length}', Icons.login, Colors.greenAccent),
+                          const SizedBox(width: 16),
+                          _buildStatCard('Đi Muộn', '${_todayAttendance.where((e) => e.status == 'Đi muộn').length}', Icons.timer, Colors.orangeAccent),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                
+                const SizedBox(height: 30),
+                
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text("Hoạt động gần đây", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.grey[800])),
+                            IconButton(
+                                icon: Icon(Icons.refresh, color: primaryColor), 
+                                onPressed: _loadTodayAttendance
+                            )
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Expanded(
+                          child: _todayAttendance.isEmpty
+                            ? _buildEmptyState()
+                            : ListView.builder(
+                                padding: EdgeInsets.only(bottom: 80),
+                                itemCount: _todayAttendance.length,
+                                itemBuilder: (context, index) {
+                                  return _buildTimelineItem(_todayAttendance[index]);
+                                },
+                              ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            FloatingActionButton.extended(
+              heroTag: "nfc",
+              onPressed: _scanNfcCard,
+              icon: Icon(Icons.nfc),
+              label: Text("QUÉT THẺ"),
+              backgroundColor: Color(0xFF2563EB),
+            ),
+            if (_isBiometricAvailable) ...[
+              SizedBox(width: 16),
+              FloatingActionButton.extended(
+                heroTag: "bio",
+                onPressed: _startBiometricAuth,
+                icon: Icon(_bioIcon), // Icon chung (Vân tay)
+                label: Text(_bioLabel), // Label chung (SINH TRẮC)
+                backgroundColor: Color(0xFF7C3AED),
+              ),
+            ]
+          ],
+        ),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
     );
   }
 }

@@ -19,24 +19,15 @@ class BiometricService {
     }
   }
 
-  /// Lấy danh sách các phương thức hỗ trợ (Vân tay, Khuôn mặt...)
-  Future<List<BiometricType>> getAvailableBiometrics() async {
-    try {
-      return await _auth.getAvailableBiometrics();
-    } on PlatformException catch (e) {
-      print('Lỗi lấy danh sách sinh trắc học: $e');
-      return [];
-    }
-  }
-
-  /// Thực hiện xác thực
+  /// Thực hiện xác thực (Hỗ trợ cả Vân tay & Khuôn mặt)
+  /// Hệ điều hành Android sẽ tự quyết định hiển thị phương thức nào.
   Future<bool> authenticate({required String reason}) async {
     try {
       return await _auth.authenticate(
         localizedReason: reason,
         options: const AuthenticationOptions(
-          stickyAuth: true, // Giữ session xác thực nếu app bị switch
-          biometricOnly: true, // Chỉ dùng sinh trắc học (không dùng PIN/Pattern backup)
+          stickyAuth: true, // Giữ session xác thực
+          biometricOnly: true, // Chỉ dùng sinh trắc học (Vân tay hoặc Face)
         ),
       );
     } on PlatformException catch (e) {
